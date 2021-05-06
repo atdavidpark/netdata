@@ -638,6 +638,27 @@ AM_CONDITIONAL([ENABLE_CAPABILITY], [test "${with_libcap}" = "yes"])
 # -----------------------------------------------------------------------------
 # ACLK
 
+PKG_CHECK_MODULES(
+    [PROTOBUF],
+    [protobuf >= 3],
+    [have_libprotobuf=yes],
+    [have_libprotobuf=no]
+)
+
+AC_PATH_PROG([PROTOC], [protoc], [no])
+AS_IF(
+    [test x"${PROTOC}" == x"no"],
+    [have_protoc=no],
+    [have_protoc=yes]
+)
+
+AC_PATH_PROG([CXX_BINARY], [${CXX}], [no])
+AS_IF(
+    [test x"${CXX_BINARY}" == x"no"],
+    [have_CXX_compiler=no],
+    [have_CXX_compiler=yes]
+)
+
 AC_MSG_CHECKING([if cloud functionality should be enabled])
 AC_MSG_RESULT([${enable_cloud}])
 if test "$enable_cloud" != "no" -a "$aclk_ng" != "yes"; then
@@ -737,24 +758,66 @@ if test "$enable_cloud" = "no" -a "$aclk_ng" = "yes"; then
 fi
 
 if test "$enable_cloud" != "no" -a "$aclk_ng" != "no"; then
+    can_enable_ng="yes"
+    AC_MSG_CHECKING([if git submodules present for ACLK Next Generation])
+    if test -f "mqtt_websockets/src/mqtt_wss_client.c"; then
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        can_enable_ng="no"
+    fi
+    AC_MSG_CHECKING([if SSL available for ACLK Next Generation])
+    if test -n "${SSL_LIBS}"; then
+        AC_MSG_RESULT([yes])
+        OPTIONAL_SSL_CFLAGS="${SSL_CFLAGS}"
+        OPTIONAL_SSL_LIBS="${SSL_LIBS}"
+    else
+        AC_MSG_RESULT([no])
+    fi
     AC_MSG_CHECKING([if JSON-C available for ACLK Next Generation])
     if test "$enable_jsonc" != "yes"; then
         AC_MSG_RESULT([no])
+        can_enable_ng="no"
     else
         AC_MSG_RESULT([yes])
-        if test "$aclk_ng" != "yes" -a "$enable_aclk" == "no"; then #default "fallback"
-            AC_MSG_NOTICE([ACLK Legacy could not be built. Trying ACLK-NG as fallback.])
-            aclk_ng="yes"
-        fi
-        if test "$aclk_ng" = "yes"; then
-    #TODO Check OpenSSL and JSON-C
-            AC_MSG_CHECKING([if ACLK Next Generation can be built])
-            AC_DEFINE([ACLK_NG], [1], [ACLK Next Generation Should be used])
-            AC_DEFINE([ENABLE_ACLK], [1], [netdata ACLK])
-            enable_aclk="yes"
-            AC_MSG_RESULT([yes])
-            OPTIONAL_MQTT_WSS_CFLAGS="-Imqtt_websockets/src/include"
-        fi
+    fi
+    AC_MSG_CHECKING([if protobuf available for ACLK Next Generation])
+    if test "${have_libprotobuf}" != "yes"; then
+        AC_MSG_RESULT([no])
+        can_enable_ng="no"
+    else
+        AC_MSG_RESULT([yes])
+    fi
+    AC_MSG_CHECKING([if protoc available for ACLK Next Generation])
+    if test "${have_protoc}" != "yes"; then
+        AC_MSG_RESULT([no])
+        can_enable_ng="no"
+    else
+        AC_MSG_RESULT([yes])
+    fi
+    AC_MSG_CHECKING([if C++ compiler available for ACLK Next Generation])
+    if test "${have_CXX_compiler}" != "yes"; then
+        AC_MSG_RESULT([no])
+        can_enable_ng="no"
+    else
+        AC_MSG_RESULT([yes])
+    fi
+    AC_MSG_CHECKING([ACLK Next Generation can be built])
+    AC_MSG_RESULT([${can_enable_ng}])
+    if test "$aclk_ng" = "yes" -a "$can_enable_ng" != "yes"; then
+        AC_MSG_ERROR([ACLK-NG requested but can't be built])
+    fi
+    if test "$aclk_ng" != "yes" -a "$enable_aclk" == "no" -a "$can_enable_ng" = "yes"; then #default "fallback"
+        AC_MSG_NOTICE([ACLK Legacy could not be built. Trying ACLK-NG as fallback.])
+        aclk_ng="yes"
+    fi
+    if test "$aclk_ng" = "yes"; then
+        AC_DEFINE([ACLK_NG], [1], [ACLK Next Generation Should be used])
+        AC_DEFINE([ENABLE_ACLK], [1], [netdata ACLK])
+        enable_aclk="yes"
+        OPTIONAL_ACLK_NG_CFLAGS="-Imqtt_websockets/src/include ${PROTOBUF_CFLAGS}"
+        CXX11FLAG="-std=c++11"
+        OPTIONAL_ACLK_NG_LIBS="${PROTOBUF_LIBS}"
     fi
 fi
 AC_SUBST([enable_cloud])
@@ -1267,13 +1330,6 @@ AM_CONDITIONAL([ENABLE_EXPORTING_PUBSUB], [test "${enable_exporting_pubsub}" = "
 # -----------------------------------------------------------------------------
 # Prometheus remote write backend - libprotobuf, libsnappy, protoc
 
-PKG_CHECK_MODULES(
-    [PROTOBUF],
-    [protobuf >= 3],
-    [have_libprotobuf=yes],
-    [have_libprotobuf=no]
-)
-
 AC_MSG_CHECKING([for snappy::RawCompress in -lsnappy])
 
     AC_LANG_SAVE
@@ -1308,20 +1364,6 @@ AC_MSG_CHECKING([for snappy::RawCompress in -lsnappy])
     AC_LANG_RESTORE
 
 AC_MSG_RESULT([${have_libsnappy}])
-
-AC_PATH_PROG([PROTOC], [protoc], [no])
-AS_IF(
-    [test x"${PROTOC}" == x"no"],
-    [have_protoc=no],
-    [have_protoc=yes]
-)
-
-AC_PATH_PROG([CXX_BINARY], [${CXX}], [no])
-AS_IF(
-    [test x"${CXX_BINARY}" == x"no"],
-    [have_CXX_compiler=no],
-    [have_CXX_compiler=yes]
-)
 
 test "${enable_backend_prometheus_remote_write}" = "yes" -a "${have_libprotobuf}" != "yes" && \
     AC_MSG_ERROR([libprotobuf required but not found. try installing protobuf])
@@ -1457,7 +1499,7 @@ CFLAGS="${CFLAGS} ${OPTIONAL_MATH_CFLAGS} ${OPTIONAL_NFACCT_CFLAGS} ${OPTIONAL_Z
     ${OPTIONAL_LIBCAP_CFLAGS} ${OPTIONAL_IPMIMONITORING_CFLAGS} ${OPTIONAL_CUPS_CFLAGS} ${OPTIONAL_XENSTAT_FLAGS} \
     ${OPTIONAL_KINESIS_CFLAGS} ${OPTIONAL_PUBSUB_CFLAGS} ${OPTIONAL_PROMETHEUS_REMOTE_WRITE_CFLAGS} \
     ${OPTIONAL_MONGOC_CFLAGS} ${LWS_CFLAGS} ${OPTIONAL_JSONC_STATIC_CFLAGS} ${OPTIONAL_BPF_CFLAGS} ${OPTIONAL_JUDY_CFLAGS} \
-    ${OPTIONAL_MQTT_WSS_CFLAGS}"
+    ${OPTIONAL_ACLK_NG_CFLAGS}"
 
 CXXFLAGS="${CFLAGS} ${CXX11FLAG}"
 
@@ -1507,7 +1549,8 @@ AC_SUBST([OPTIONAL_PROMETHEUS_REMOTE_WRITE_LIBS])
 AC_SUBST([OPTIONAL_MONGOC_CFLAGS])
 AC_SUBST([OPTIONAL_MONGOC_LIBS])
 AC_SUBST([OPTIONAL_LWS_LIBS])
-AC_SUBST([OPTIONAL_MQTT_WSS_CFLAGS])
+AC_SUBST([OPTIONAL_ACLK_NG_CFLAGS])
+AC_SUBST([OPTIONAL_ACLK_NG_LIBS])
 
 # -----------------------------------------------------------------------------
 # Check if cmocka is available - needed for unit testing
